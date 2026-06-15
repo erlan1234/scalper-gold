@@ -30,7 +30,7 @@ input int             ATRPeriod     = 14;          // ATR period (for SL/TP dist
 
 input group "=== Risk / Exits ==="
 input double SL_ATR_Mult    = 1.5;    // Stop-loss distance = ATR x this
-input double TP_ATR_Mult    = 2.0;    // Take-profit distance = ATR x this (R:R = TP/SL)
+input double RewardRisk     = 2.0;    // Take-profit = SL distance x this (2.0 = R:R 1:2)
 input bool   UseRiskPercent = false;  // false = fixed lot (safe default); true = % risk sizing
 input double FixedLot       = 0.01;   // Lot used when UseRiskPercent = false
 input double RiskPercent    = 2.0;    // % of balance risked per trade (when UseRiskPercent = true)
@@ -314,7 +314,7 @@ double FindSwingHigh(int lr, int maxBars)
 // TP keeps the ATR reward:risk but extends to the swing target if it is further.
 void ComputeStops(bool isLong, double price, double atr, double &slDist, double &tpDist)
 {
-   double rr  = (SL_ATR_Mult > 0) ? (TP_ATR_Mult / SL_ATR_Mult) : 1.5;
+   double rr  = RewardRisk;          // reward : risk (2.0 = 1:2)
    double buf = SwingBufferATR * atr;
 
    // --- Stop-loss ---
@@ -334,18 +334,8 @@ void ComputeStops(bool isLong, double price, double atr, double &slDist, double 
    if(slDist < slFloor) slDist = slFloor;
    if(slDist > slCap)   slDist = slCap;
 
-   // --- Take-profit: at least the ATR reward, extend to swing target if further ---
-   tpDist = slDist * rr;
-   if(UseSwingStops)
-   {
-      double swT = isLong ? FindSwingHigh(SwingLookback, SwingScanBars)
-                          : FindSwingLow(SwingLookback, SwingScanBars);
-      if(swT > 0)
-      {
-         double dt = isLong ? (swT - price) : (price - swT);
-         if(dt > tpDist) tpDist = dt;
-      }
-   }
+   // --- Take-profit: fixed reward:risk off the (structural) SL distance ---
+   tpDist = slDist * rr;             // e.g. SL $8 -> TP $16 (1:2)
 }
 
 //============================ POSITION MGMT ========================
