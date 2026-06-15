@@ -56,6 +56,7 @@ input group "=== Telegram alerts ==="
 input bool   EnableTelegram = false; // turn ON to send Telegram notifications
 input string TelegramToken  = "";    // bot token from @BotFather
 input string TelegramChatID = "";    // your chat id (get it from @userinfobot)
+input int    TelegramPollSec = 5;    // check for incoming Telegram commands every N seconds
 
 //============================ GLOBALS ==============================
 int      hEmaFast = INVALID_HANDLE, hEmaSlow = INVALID_HANDLE;
@@ -71,6 +72,8 @@ string   g_regime  = "warming up";
 double   g_rsiNow  = 0.0;
 string   g_waiting = "menunggu data candle...";
 string   g_tgQueue[];   // pending Telegram messages, flushed in OnTick
+bool     g_paused      = false;  // paused via Telegram /pause
+long     g_lastUpdateId = 0;     // last processed Telegram update_id
 
 //============================ INIT =================================
 int OnInit()
@@ -97,8 +100,13 @@ int OnInit()
                _Symbol, EnumToString(TradeTF),
                UseRiskPercent ? StringFormat("risk %.1f%%", RiskPercent)
                               : StringFormat("fixed %.2f lot", FixedLot));
-   QueueTelegram(StringFormat("GoldScalperEA online di %s %s — siap berburu sinyal.",
+   QueueTelegram(StringFormat("GoldScalperEA online di %s %s — siap berburu sinyal. Ketik /help untuk perintah.",
                               _Symbol, EnumToString(TradeTF)));
+   if(EnableTelegram)
+   {
+      PollTelegram(false);                              // drain old messages, don't run them
+      EventSetTimer(TelegramPollSec < 2 ? 2 : TelegramPollSec);
+   }
    return(INIT_SUCCEEDED);
 }
 
@@ -109,6 +117,7 @@ void OnDeinit(const int reason)
    if(hEmaTrend!=INVALID_HANDLE) IndicatorRelease(hEmaTrend);
    if(hRSI!=INVALID_HANDLE)      IndicatorRelease(hRSI);
    if(hATR!=INVALID_HANDLE)      IndicatorRelease(hATR);
+   EventKillTimer();
    Comment("");
 }
 
@@ -120,7 +129,7 @@ void OnTick()
    ManageOpenPositions();     // max-hold auto-close
    UpdateDashboard();
 
-   if(haltedToday)            return;   // daily limit hit
+   if(haltedToday || g_paused) return;  // daily limit hit, or paused via Telegram /pause
    if(!IsTradeSession())      return;   // outside trading window
 
    // Act once per closed bar (no repaint, no tick spam)
@@ -367,7 +376,7 @@ void UpdateDashboard()
    s += "Session     : " + (IsTradeSession() ? "ACTIVE" : "closed") + "   Spread: " + (string)CurrentSpreadPoints() + " pts\n";
    s += "Regime      : " + g_regime + "   RSI: " + DoubleToString(g_rsiNow,1) + "\n";
    s += "Menunggu    : " + g_waiting + "\n";
-   s += "STATUS      : " + (haltedToday ? "HALTED (daily limit)" : "running") + "\n";
+   s += "STATUS      : " + (haltedToday ? "HALTED (daily limit)" : (g_paused ? "PAUSED (Telegram)" : "running")) + "\n";
    s += "──────────────────────\n";
    s += "DEMO-FIRST. You own every trade this bot makes.";
    Comment(s);
@@ -443,5 +452,154 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    QueueTelegram(StringFormat("%s %s ditutup @ %.2f | P/L %.2f %s | harian %.2f%%",
                  profit >= 0 ? "WIN +" : "LOSS", _Symbol, price, profit,
                  AccountInfoString(ACCOUNT_CURRENCY), dpnl));
+}
+
+//==================== TELEGRAM TWO-WAY (commands) =================
+void OnTimer()
+{
+   PollTelegram(true);
+}
+
+// Minimal JSON helpers (no native JSON in MQL5)
+string ExtractJsonString(string js, string key)
+{
+   string pat = "\"" + key + "\":\"";
+   int p = StringFind(js, pat);
+   if(p < 0) return "";
+   p += StringLen(pat);
+   int e = StringFind(js, "\"", p);
+   while(e > 0 && StringGetCharacter(js, e-1) == '\\')
+      e = StringFind(js, "\"", e+1);
+   if(e < 0) return "";
+   return StringSubstr(js, p, e - p);
+}
+
+string ExtractChatId(string seg)
+{
+   int c = StringFind(seg, "\"chat\":");
+   if(c < 0) return "";
+   int idp = StringFind(seg, "\"id\":", c);
+   if(idp < 0) return "";
+   idp += 5;
+   string out = "";
+   for(int i = idp; i < StringLen(seg); i++)
+   {
+      ushort ch = StringGetCharacter(seg, i);
+      if((ch >= '0' && ch <= '9') || ch == '-') out += ShortToString(ch);
+      else break;
+   }
+   return out;
+}
+
+void PollTelegram(bool execute)
+{
+   if(!EnableTelegram || TelegramToken == "" || TelegramChatID == "") return;
+   string url = "https://api.telegram.org/bot" + TelegramToken +
+                "/getUpdates?timeout=0&offset=" + IntegerToString(g_lastUpdateId + 1);
+   uchar data[], result[];
+   string resHeaders;
+   ResetLastError();
+   int code = WebRequest("GET", url, "", 4000, data, result, resHeaders);
+   if(code != 200) return;
+   string js = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+
+   int pos = 0;
+   while(true)
+   {
+      int u = StringFind(js, "\"update_id\":", pos);
+      if(u < 0) break;
+      int idStart = u + StringLen("\"update_id\":");
+      long uid = (long)StringToInteger(StringSubstr(js, idStart, 20));
+      int nextU  = StringFind(js, "\"update_id\":", idStart);
+      int segEnd = (nextU < 0) ? StringLen(js) : nextU;
+      string seg = StringSubstr(js, idStart, segEnd - idStart);
+
+      if(uid > g_lastUpdateId)
+      {
+         g_lastUpdateId = uid;
+         if(execute)
+         {
+            string chatId = ExtractChatId(seg);
+            string text   = ExtractJsonString(seg, "text");
+            if(chatId == TelegramChatID && StringLen(text) > 0)
+               HandleCommand(text);
+         }
+      }
+      if(nextU < 0) break;
+      pos = segEnd;
+   }
+}
+
+void HandleCommand(string text)
+{
+   StringTrimLeft(text);
+   StringTrimRight(text);
+   string cmd = text;
+   int sp = StringFind(cmd, " ");
+   if(sp > 0) cmd = StringSubstr(cmd, 0, sp);
+   int at = StringFind(cmd, "@");          // strip /cmd@BotName
+   if(at > 0) cmd = StringSubstr(cmd, 0, at);
+   StringToLower(cmd);
+
+   if(cmd == "/status")       SendTelegram(BuildStatus());
+   else if(cmd == "/report")  SendTelegram(BuildReport());
+   else if(cmd == "/pause")   { g_paused = true;  SendTelegram("Bot di-PAUSE. Entry baru distop; posisi terbuka tetap dijaga SL/TP. Kirim /resume untuk lanjut."); }
+   else if(cmd == "/resume")  { g_paused = false; SendTelegram("Bot LANJUT — kembali mencari sinyal."); }
+   else if(cmd == "/close")   CloseAllAndReport();
+   else if(cmd == "/help" || cmd == "/start") SendTelegram(BuildHelp());
+   else SendTelegram("Perintah tidak dikenal: " + cmd + "\nKetik /help.");
+}
+
+string BuildStatus()
+{
+   double dpnl = dailyStartEquity > 0
+                 ? (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0 : 0.0;
+   return StringFormat("STATUS %s %s\nRegime: %s\nRSI: %.1f\n%s\nPosisi EA: %d/%d | Trade hari ini: %d\nP/L harian: %.2f%%\nState: %s",
+          _Symbol, EnumToString(TradeTF), g_regime, g_rsiNow, g_waiting,
+          CountMyPositions(), MaxOpenPositions, tradesToday, dpnl,
+          haltedToday ? "HALTED (limit)" : (g_paused ? "PAUSED" : "running"));
+}
+
+string BuildReport()
+{
+   datetime from = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));   // midnight server time
+   HistorySelect(from, TimeCurrent());
+   int total = HistoryDealsTotal();
+   int wins = 0, losses = 0, closed = 0;
+   double net = 0.0;
+   for(int i = 0; i < total; i++)
+   {
+      ulong t = HistoryDealGetTicket(i);
+      if(t == 0) continue;
+      if(HistoryDealGetInteger(t, DEAL_MAGIC)  != MagicNumber) continue;
+      if(HistoryDealGetString(t, DEAL_SYMBOL)  != _Symbol)     continue;
+      if(HistoryDealGetInteger(t, DEAL_ENTRY)  != DEAL_ENTRY_OUT) continue;
+      double p = HistoryDealGetDouble(t, DEAL_PROFIT);
+      net += p; closed++;
+      if(p >= 0) wins++; else losses++;
+   }
+   double dpnl = dailyStartEquity > 0
+                 ? (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0 : 0.0;
+   return StringFormat("LAPORAN hari ini\nTrade selesai: %d (W:%d L:%d)\nNet: %.2f %s\nP/L harian: %.2f%%\nPosisi terbuka: %d",
+          closed, wins, losses, net, AccountInfoString(ACCOUNT_CURRENCY), dpnl, CountMyPositions());
+}
+
+string BuildHelp()
+{
+   return "Perintah GoldScalperEA:\n/status - kondisi & sinyal sekarang\n/report - rekap trade hari ini\n/pause - stop entry baru\n/resume - lanjutkan\n/close - tutup posisi EA yang terbuka\n/help - tampilkan ini";
+}
+
+void CloseAllAndReport()
+{
+   int n = 0;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+         PositionGetString(POSITION_SYMBOL) == _Symbol)
+         if(trade.PositionClose(tk)) n++;
+   }
+   SendTelegram(StringFormat("/close: %d posisi EA ditutup.", n));
 }
 //+------------------------------------------------------------------+
