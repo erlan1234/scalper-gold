@@ -24,8 +24,8 @@ input int             FastEMA       = 21;          // Fast EMA (trade TF)
 input int             SlowEMA       = 50;          // Slow EMA (trade TF)
 input int             TrendEMA      = 200;         // Trend EMA (on TrendTF)
 input int             RSIPeriod     = 14;          // RSI period
-input double          RSILongReset  = 50.0;        // Long: RSI crosses UP through this (50=midline; lower=stricter/rarer)
-input double          RSIShortReset = 50.0;        // Short: RSI crosses DOWN through this (50=midline; higher=stricter/rarer)
+input double          RSILongLevel  = 50.0;        // Long: RSI crosses UP through this (50=midline; lower=stricter/rarer)
+input double          RSIShortLevel = 50.0;        // Short: RSI crosses DOWN through this (50=midline; higher=stricter/rarer)
 input int             ATRPeriod     = 14;          // ATR period (for SL/TP distance)
 
 input group "=== Risk / Exits ==="
@@ -52,6 +52,11 @@ input group "=== Misc ==="
 input long   MagicNumber  = 990013;          // Unique ID for this EA's trades
 input string TradeComment = "GoldScalperEA"; // Order comment
 
+input group "=== Telegram alerts ==="
+input bool   EnableTelegram = false; // turn ON to send Telegram notifications
+input string TelegramToken  = "";    // bot token from @BotFather
+input string TelegramChatID = "";    // your chat id (get it from @userinfobot)
+
 //============================ GLOBALS ==============================
 int      hEmaFast = INVALID_HANDLE, hEmaSlow = INVALID_HANDLE;
 int      hEmaTrend = INVALID_HANDLE, hRSI = INVALID_HANDLE, hATR = INVALID_HANDLE;
@@ -65,6 +70,7 @@ bool     haltedToday    = false;
 string   g_regime  = "warming up";
 double   g_rsiNow  = 0.0;
 string   g_waiting = "menunggu data candle...";
+string   g_tgQueue[];   // pending Telegram messages, flushed in OnTick
 
 //============================ INIT =================================
 int OnInit()
@@ -91,6 +97,8 @@ int OnInit()
                _Symbol, EnumToString(TradeTF),
                UseRiskPercent ? StringFormat("risk %.1f%%", RiskPercent)
                               : StringFormat("fixed %.2f lot", FixedLot));
+   QueueTelegram(StringFormat("GoldScalperEA online di %s %s — siap berburu sinyal.",
+                              _Symbol, EnumToString(TradeTF)));
    return(INIT_SUCCEEDED);
 }
 
@@ -107,6 +115,7 @@ void OnDeinit(const int reason)
 //============================ MAIN LOOP ============================
 void OnTick()
 {
+   FlushTelegram();           // send any queued Telegram alerts
    ManageDailyState();        // reset on new day + evaluate kill-switch
    ManageOpenPositions();     // max-hold auto-close
    UpdateDashboard();
@@ -156,8 +165,8 @@ void CheckSignals()
    bool bear = (closePrev < et) && (ef < es);   // downtrend regime
 
    // Pullback reset: RSI crosses back up (long) / down (short) through the reset level
-   bool longSig  = bull && (r2 <  RSILongReset)  && (r1 >= RSILongReset);
-   bool shortSig = bear && (r2 >  RSIShortReset) && (r1 <= RSIShortReset);
+   bool longSig  = bull && (r2 <  RSILongLevel)  && (r1 >= RSILongLevel);
+   bool shortSig = bear && (r2 >  RSIShortLevel) && (r1 <= RSIShortLevel);
 
    // --- diagnostics: record WHY we do / don't enter this bar ---
    g_rsiNow = r1;
@@ -167,11 +176,11 @@ void CheckSignals()
    else if(bull)
       g_waiting = longSig ? "SINYAL LONG!"
                           : StringFormat("perlu RSI cross naik %.0f (kini %.0f, %s)",
-                                         RSILongReset, r1, r1 < RSILongReset ? "siap" : "blm pullback");
+                                         RSILongLevel, r1, r1 < RSILongLevel ? "siap" : "blm pullback");
    else
       g_waiting = shortSig ? "SINYAL SHORT!"
                            : StringFormat("perlu RSI cross turun %.0f (kini %.0f, %s)",
-                                          RSIShortReset, r1, r1 > RSIShortReset ? "siap" : "blm bounce");
+                                          RSIShortLevel, r1, r1 > RSIShortLevel ? "siap" : "blm bounce");
 
    PrintFormat("bar %s | regime=%s | RSI=%.1f | %s",
                TimeToString(iTime(_Symbol,TradeTF,0), TIME_MINUTES), g_regime, r1, g_waiting);
@@ -209,6 +218,8 @@ void OpenTrade(bool isLong, double atr)
       tradesToday++;
       PrintFormat("%s %s  lot=%.2f  entry=%.2f  SL=%.2f  TP=%.2f  (trade %d today)",
                   isLong ? "BUY" : "SELL", _Symbol, lot, price, sl, tp, tradesToday);
+      QueueTelegram(StringFormat("ENTRY %s %s %.2f lot @ %.2f | SL %.2f | TP %.2f (trade %d)",
+                  isLong ? "BUY" : "SELL", _Symbol, lot, price, sl, tp, tradesToday));
    }
    else
       PrintFormat("Order FAILED: retcode=%d (%s)",
@@ -294,15 +305,22 @@ void ManageDailyState()
    if(MaxDailyLossPct > 0 && pnlPct <= -MaxDailyLossPct)
    {
       if(!haltedToday)
+      {
          PrintFormat("KILL-SWITCH: daily P/L %.2f%% <= -%.1f%% — no more trades today.",
                      pnlPct, MaxDailyLossPct);
+         QueueTelegram(StringFormat("KILL-SWITCH: rugi harian %.2f%% — bot STOP entry hari ini.", pnlPct));
+      }
       haltedToday = true;
    }
    if(DailyProfitTarget > 0 && pnlPct >= DailyProfitTarget)
    {
       if(!haltedToday)
+      {
          PrintFormat("TARGET HIT: daily P/L %.2f%% >= %.1f%% — locking in, no more trades today.",
                      pnlPct, DailyProfitTarget);
+         QueueTelegram(StringFormat("TARGET +%.1f%% tercapai (%.2f%%) — bot kunci profit, stop hari ini.",
+                                    DailyProfitTarget, pnlPct));
+      }
       haltedToday = true;
    }
 }
@@ -353,5 +371,77 @@ void UpdateDashboard()
    s += "──────────────────────\n";
    s += "DEMO-FIRST. You own every trade this bot makes.";
    Comment(s);
+}
+
+//============================ TELEGRAM =============================
+string UrlEncode(string s)
+{
+   string out = "";
+   uchar b[];
+   int n = StringToCharArray(s, b, 0, -1, CP_UTF8);   // includes trailing 0
+   for(int i = 0; i < n; i++)
+   {
+      uchar c = b[i];
+      if(c == 0) break;
+      if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'||c=='~')
+         out += CharToString(c);
+      else
+         out += StringFormat("%%%02X", c);
+   }
+   return out;
+}
+
+void SendTelegram(string text)
+{
+   if(!EnableTelegram || TelegramToken == "" || TelegramChatID == "") return;
+   string url  = "https://api.telegram.org/bot" + TelegramToken + "/sendMessage";
+   string body = "chat_id=" + TelegramChatID + "&text=" + UrlEncode(text);
+   uchar post[], result[];
+   int written = StringToCharArray(body, post, 0, -1, CP_UTF8);
+   if(written > 0) ArrayResize(post, written - 1);    // drop trailing '\0' from POST body
+   string resHeaders;
+   ResetLastError();
+   int code = WebRequest("POST", url, "Content-Type: application/x-www-form-urlencoded\r\n",
+                         5000, post, result, resHeaders);
+   if(code == -1)
+      PrintFormat("Telegram gagal (err %d) — tambahkan https://api.telegram.org di Tools > Options > Expert Advisors > Allow WebRequest.",
+                  GetLastError());
+   else if(code != 200)
+      PrintFormat("Telegram HTTP %d: %s", code, CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8));
+}
+
+void QueueTelegram(string msg)
+{
+   if(!EnableTelegram) return;
+   int n = ArraySize(g_tgQueue);
+   ArrayResize(g_tgQueue, n + 1);
+   g_tgQueue[n] = msg;
+}
+
+void FlushTelegram()
+{
+   int n = ArraySize(g_tgQueue);
+   if(n == 0) return;
+   for(int i = 0; i < n; i++) SendTelegram(g_tgQueue[i]);
+   ArrayResize(g_tgQueue, 0);
+}
+
+// Report position closes (TP / SL / manual) for EA-owned trades
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   if(!HistoryDealSelect(trans.deal)) return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC)  != MagicNumber) return;
+   if(HistoryDealGetString(trans.deal, DEAL_SYMBOL)  != _Symbol)     return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_ENTRY)  != DEAL_ENTRY_OUT) return;
+   double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+   double price  = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+   double dpnl   = dailyStartEquity > 0
+                   ? (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0 : 0.0;
+   QueueTelegram(StringFormat("%s %s ditutup @ %.2f | P/L %.2f %s | harian %.2f%%",
+                 profit >= 0 ? "WIN +" : "LOSS", _Symbol, price, profit,
+                 AccountInfoString(ACCOUNT_CURRENCY), dpnl));
 }
 //+------------------------------------------------------------------+
