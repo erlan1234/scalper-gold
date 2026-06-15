@@ -37,6 +37,13 @@ input double RiskPercent    = 2.0;    // % of balance risked per trade (when Use
 input double MaxLot         = 1.0;    // Hard cap on lot size (safety)
 input int    MaxHoldHours   = 24;     // Force-close a position after N hours (0 = off)
 
+input group "=== Swing structure (SL/TP) ==="
+input bool   UseSwingStops  = true;   // place SL/TP at swing low/high instead of pure ATR
+input int    SwingLookback  = 5;      // bars on each side to confirm a swing (pivot strength)
+input int    SwingScanBars  = 60;     // how far back to search for the latest swing
+input double SwingBufferATR = 0.3;    // buffer beyond the swing, as a fraction of ATR
+input double SwingSLCapATR  = 3.0;    // max SL distance in ATR (risk cap if the swing is far)
+
 input group "=== Daily guards (kill-switch) ==="
 input double MaxDailyLossPct   = 5.0;  // Halt trading if down this % on the day
 input double DailyProfitTarget = 5.0;  // Halt trading if up this % on the day (0 = off)
@@ -205,8 +212,8 @@ void OpenTrade(bool isLong, double atr)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double price = isLong ? ask : bid;
 
-   double slDist = atr * SL_ATR_Mult;
-   double tpDist = atr * TP_ATR_Mult;
+   double slDist, tpDist;
+   ComputeStops(isLong, price, atr, slDist, tpDist);
 
    // Respect broker minimum stop distance
    double stopsLevel = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
@@ -264,6 +271,81 @@ double CalcLot(double slDist)
    if(lot > maxLot) lot = maxLot;
 
    return NormalizeDouble(lot, 2);
+}
+
+//============================ SWING STRUCTURE ======================
+// Most recent CONFIRMED swing low within the scan window (0 if none).
+double FindSwingLow(int lr, int maxBars)
+{
+   if(lr < 1) return 0.0;
+   double low[];
+   ArraySetAsSeries(low, true);
+   int copied = CopyLow(_Symbol, TradeTF, 0, maxBars + lr + 2, low);
+   if(copied < lr*2 + 1) return 0.0;
+   for(int i = lr; i <= maxBars && i + lr < copied; i++)
+   {
+      bool ok = true;
+      for(int j = 1; j <= lr; j++)
+         if(!(low[i] < low[i-j] && low[i] < low[i+j])) { ok = false; break; }
+      if(ok) return low[i];
+   }
+   return 0.0;
+}
+
+// Most recent CONFIRMED swing high within the scan window (0 if none).
+double FindSwingHigh(int lr, int maxBars)
+{
+   if(lr < 1) return 0.0;
+   double high[];
+   ArraySetAsSeries(high, true);
+   int copied = CopyHigh(_Symbol, TradeTF, 0, maxBars + lr + 2, high);
+   if(copied < lr*2 + 1) return 0.0;
+   for(int i = lr; i <= maxBars && i + lr < copied; i++)
+   {
+      bool ok = true;
+      for(int j = 1; j <= lr; j++)
+         if(!(high[i] > high[i-j] && high[i] > high[i+j])) { ok = false; break; }
+      if(ok) return high[i];
+   }
+   return 0.0;
+}
+
+// Structural SL/TP: SL beyond the last swing (buffered + ATR-capped),
+// TP keeps the ATR reward:risk but extends to the swing target if it is further.
+void ComputeStops(bool isLong, double price, double atr, double &slDist, double &tpDist)
+{
+   double rr  = (SL_ATR_Mult > 0) ? (TP_ATR_Mult / SL_ATR_Mult) : 1.5;
+   double buf = SwingBufferATR * atr;
+
+   // --- Stop-loss ---
+   slDist = atr * SL_ATR_Mult;   // ATR fallback
+   if(UseSwingStops)
+   {
+      double sw = isLong ? FindSwingLow(SwingLookback, SwingScanBars)
+                         : FindSwingHigh(SwingLookback, SwingScanBars);
+      if(sw > 0)
+      {
+         double d = isLong ? (price - sw) + buf : (sw - price) + buf;
+         if(d > 0) slDist = d;
+      }
+   }
+   double slFloor = atr * SL_ATR_Mult * 0.6;   // never absurdly tight
+   double slCap   = atr * SwingSLCapATR;        // never beyond the risk cap
+   if(slDist < slFloor) slDist = slFloor;
+   if(slDist > slCap)   slDist = slCap;
+
+   // --- Take-profit: at least the ATR reward, extend to swing target if further ---
+   tpDist = slDist * rr;
+   if(UseSwingStops)
+   {
+      double swT = isLong ? FindSwingHigh(SwingLookback, SwingScanBars)
+                          : FindSwingLow(SwingLookback, SwingScanBars);
+      if(swT > 0)
+      {
+         double dt = isLong ? (swT - price) : (price - swT);
+         if(dt > tpDist) tpDist = dt;
+      }
+   }
 }
 
 //============================ POSITION MGMT ========================
