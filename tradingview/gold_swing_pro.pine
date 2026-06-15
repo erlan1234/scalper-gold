@@ -1,0 +1,66 @@
+//@version=5
+indicator("Gold Swing Pro — EMA 21/50/200 + Signals", overlay=true)
+
+// ===== Inputs =====
+emaFastLen = input.int(21,  "EMA Fast",  group="Trend")
+emaMidLen  = input.int(50,  "EMA Mid",   group="Trend")
+emaSlowLen = input.int(200, "EMA Slow (Trend Filter)", group="Trend")
+rsiLen     = input.int(14,  "RSI Length", group="Momentum")
+rsiBull    = input.int(45,  "RSI Bull floor (long)",  group="Momentum")
+rsiBear    = input.int(55,  "RSI Bear ceiling (short)", group="Momentum")
+atrLen     = input.int(14,  "ATR Length", group="Risk")
+atrMult    = input.float(2.0, "ATR Stop x", group="Risk")
+showInfo   = input.bool(true, "Show info box", group="Display")
+
+// ===== Calculations =====
+emaF = ta.ema(close, emaFastLen)
+emaM = ta.ema(close, emaMidLen)
+emaS = ta.ema(close, emaSlowLen)
+rsi  = ta.rsi(close, rsiLen)
+atr  = ta.atr(atrLen)
+
+// ===== Trend regime (Daily-style filter on whatever TF you load) =====
+upTrend   = close > emaS and emaM > emaS
+downTrend = close < emaS and emaM < emaS
+
+// ===== Pullback entry signals =====
+// LONG : in an uptrend, price pulls back then reclaims the EMA21 while RSI holds its bull floor
+longSignal  = upTrend   and ta.crossover(close, emaF)  and rsi >= rsiBull
+// SHORT: in a downtrend, price rallies then loses the EMA21 while RSI stays under its bear ceiling
+shortSignal = downTrend and ta.crossunder(close, emaF) and rsi <= rsiBear
+
+// ===== Plots =====
+plot(emaF, "EMA 21",  color=color.new(color.aqua,   0), linewidth=1)
+plot(emaM, "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
+plot(emaS, "EMA 200", color=color.new(color.red,    0), linewidth=2)
+
+bgcolor(upTrend ? color.new(color.green, 92) : downTrend ? color.new(color.red, 92) : na, title="Trend tint")
+
+plotshape(longSignal,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text="BUY",  textcolor=color.white, size=size.small)
+plotshape(shortSignal, "SELL", shape.labeldown, location.abovebar, color.new(color.red,   0), text="SELL", textcolor=color.white, size=size.small)
+
+// ===== Suggested ATR stop levels on a fresh signal =====
+longStop  = close - atrMult * atr
+shortStop = close + atrMult * atr
+plot(longSignal  ? longStop  : na, "Long stop",  color=color.new(color.green, 30), style=plot.style_cross, linewidth=2)
+plot(shortSignal ? shortStop : na, "Short stop", color=color.new(color.red,   30), style=plot.style_cross, linewidth=2)
+
+// ===== Info box =====
+var table info = table.new(position.top_right, 2, 5, border_width=1)
+if showInfo and barstate.islast
+    regime = upTrend ? "UP ▲" : downTrend ? "DOWN ▼" : "RANGE ↔"
+    regimeCol = upTrend ? color.green : downTrend ? color.red : color.gray
+    table.cell(info, 0, 0, "Gold Swing Pro", text_color=color.white, bgcolor=color.new(color.blue, 0), text_size=size.small)
+    table.cell(info, 1, 0, "4H/D",            text_color=color.white, bgcolor=color.new(color.blue, 0), text_size=size.small)
+    table.cell(info, 0, 1, "Trend",  text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 1, regime,   text_color=regimeCol,  text_size=size.small)
+    table.cell(info, 0, 2, "RSI",    text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 2, str.tostring(rsi, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 3, "ATR",    text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(atr, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 4, "Stop x", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(atrMult * atr, "#.0"), text_color=color.white, text_size=size.small)
+
+// ===== Alerts =====
+alertcondition(longSignal,  "Gold Long",  "XAUUSD long pullback signal")
+alertcondition(shortSignal, "Gold Short", "XAUUSD short pullback signal")

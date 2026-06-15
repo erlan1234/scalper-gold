@@ -1,0 +1,65 @@
+{
+  "_profile": "Beginner SWING trader — Gold (XAUUSD). Not a day trader. Trades the 4H, judges trend on the Daily, holds positions for days. Lot size 0.01.",
+  "_strategy": "Trend-pullback (the most common approach among experienced gold traders): use the EMA 200 to define the trend, then only enter in that direction when price pulls back to an EMA and RSI resets. Confirm, don't predict.",
+
+  "watchlist": ["OANDA:XAUUSD"],
+  "default_timeframe": "240",
+
+  "chart_indicators": {
+    "EMA 200": "Trend filter. Price ABOVE = uptrend (only look for buys). Price BELOW = downtrend (only look for sells).",
+    "RSI (14)": "Momentum. Use GOLD zones 40/50/60 — NOT 30/70. In an uptrend RSI dips to 40-45 then turns up = buy trigger. In a downtrend RSI rallies to 55-60 then turns down = sell trigger.",
+    "Volume": "Confirmation. A signal candle on above-average volume is stronger."
+  },
+
+  "bias_criteria": {
+    "bullish": [
+      "Price is trading ABOVE the EMA 200 on the 4H (uptrend regime)",
+      "RSI(14) holds above 50; pullbacks bounce from the 40-45 zone and do not break below 40",
+      "Price structure shows higher highs and higher lows",
+      "Daily timeframe also shows price above its EMA 200 (trend agreement)"
+    ],
+    "bearish": [
+      "Price is trading BELOW the EMA 200 on the 4H (downtrend regime — this is the CURRENT state, price ~4,220 vs EMA200 ~4,483)",
+      "RSI(14) holds below 50; rallies stall in the 55-60 zone and do not break above 60",
+      "Price structure shows lower highs and lower lows",
+      "Daily timeframe also shows price below its EMA 200 (trend agreement)"
+    ],
+    "neutral": [
+      "Price is chopping right around the EMA 200 (flat / no clear trend)",
+      "RSI(14) is stuck between 45 and 55 with no momentum",
+      "No clean higher-high or lower-low structure — range-bound. Best action: WAIT, do not force a trade"
+    ]
+  },
+
+  "entry_checklist": [
+    "1. TREND: Is price above (buy-only) or below (sell-only) the EMA 200? Trade only with it.",
+    "2. PULLBACK: Has price pulled back toward the EMA after moving away? Don't chase candles in the middle of a run.",
+    "3. RSI RESET: In an uptrend, has RSI dipped to ~40-45 and started turning up? (mirror for downtrends: ~55-60 turning down)",
+    "4. CONFIRMATION: Wait for a 4H candle to CLOSE in your direction before entering — no guessing mid-candle.",
+    "5. STOP & TARGET: Mark your stop (2x ATR or beyond the last swing) and target (1:2+ R:R) BEFORE you click."
+  ],
+
+  "position_sizing": {
+    "lot": 0.01,
+    "what_it_means": "0.01 lot = 1 oz of gold. Every $1.00 move in price = $1.00 profit/loss. A 100-point ($100) move = $100.",
+    "stop_example": "A 2x ATR stop on the 4H is currently ~$100 (ATR(14) ~$50). At 0.01 lot that risks ~$100 — only take it if that is <= 2% of your account balance. If not, your account is too small for a 0.01 swing stop; widen account or use a broker offering 0.001/nano lots.",
+    "rule": "Keep size at 0.01 until you are profitable over at least 1 full month. Do not size up to recover a loss."
+  },
+
+  "risk_rules": [
+    "SWING ONLY: enter on the 4H, confirm trend on the Daily, hold for days. Do NOT scalp or watch 1m/5m charts.",
+    "Always set a Stop Loss BEFORE entering — every single trade, no exceptions.",
+    "Trade ONLY in the direction of the EMA 200. Above = buys on pullbacks. Below = sells on rallies.",
+    "Minimum 1:2 risk-to-reward. If you risk $100, the target must be $200 or more.",
+    "Risk at most 1-2% of account balance per trade.",
+    "Position size fixed at 0.01 lot until consistently profitable for 1+ month.",
+    "Max 2 open gold positions at once.",
+    "If you take 2 losing trades in a row, STOP for the day and review — no revenge trading.",
+    "Do NOT enter right before or during high-impact news (FOMC, US CPI, NFP) — gold whipsaws violently. Wait for it to settle.",
+    "When in doubt or the market is 'neutral', the correct move is to WAIT. No trade is a position."
+  ],
+
+  "current_market_read": "As of this setup: 4H and Daily are BELOW the EMA 200 = downtrend regime. RSI(14) ~50 (neutral). Bias = look for SELLS on rallies into resistance (4,246 / 4,259), not buys. Earlier analysis flagged a sell zone 4,246-4,259 with stop ~4,280 toward 4,170/4,099. Do not buy against the trend unless price reclaims and holds above the EMA 200.",
+
+  "notes": "Strategy researched from how experienced gold swing traders trade (trend-pullback with EMA 200 + RSI; sources: NordFX, LiteFinance, FXNX, ForexGDP, Mudrex). On-chart indicators are EMA 200 (trend) + RSI 14 (momentum, read with 40/60 gold zones). A richer custom indicator 'Gold Swing Pro — EMA 21/50/200 + Signals' (3-EMA ribbon + auto BUY/SELL pullback labels + ATR stops + trend tint) is SAVED in your TradingView account under Pine Editor > Recently used. To use it: open Pine Editor, load that script, click the play/Add-to-chart button, and remove one built-in indicator first (your Basic plan allows only 2 indicators per chart; upgrade to add more). Gold is highly volatile (4H ATR ~$50, Daily ~$115) — respect stops and keep size small while learning."
+}

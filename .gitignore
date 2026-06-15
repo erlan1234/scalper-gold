@@ -1,0 +1,18 @@
+# Compiled MQL5 binaries
+*.ex5
+*.ex4
+
+# MetaEditor / MT5 logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Secrets — never commit broker/API credentials
+.env
+*.key
+credentials*.json
