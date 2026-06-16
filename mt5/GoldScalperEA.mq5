@@ -65,6 +65,10 @@ input string TelegramToken  = "";    // bot token from @BotFather
 input string TelegramChatID = "";    // your chat id (get it from @userinfobot)
 input int    TelegramPollSec = 5;    // check for incoming Telegram commands every N seconds
 
+input group "=== Trade logging (learning data) ==="
+input bool   EnableTradeLog = true;                       // log each closed trade + features to CSV
+input string TradeLogFile   = "GoldScalperEA_trades.csv"; // in MQL5/Files (tester: its own Files)
+
 //============================ GLOBALS ==============================
 int      hEmaFast = INVALID_HANDLE, hEmaSlow = INVALID_HANDLE;
 int      hEmaTrend = INVALID_HANDLE, hRSI = INVALID_HANDLE, hATR = INVALID_HANDLE;
@@ -81,6 +85,15 @@ string   g_waiting = "menunggu data candle...";
 string   g_tgQueue[];   // pending Telegram messages, flushed in OnTick
 bool     g_paused      = false;  // paused via Telegram /pause
 long     g_lastUpdateId = 0;     // last processed Telegram update_id
+
+// --- entry-feature snapshot, held until the trade closes (learning log) ---
+double   g_featEmaGap = 0, g_featTrendDist = 0;   // latest values, refreshed each bar
+bool     g_eHasOpen = false;
+datetime g_eTime = 0;
+string   g_eDir = "", g_eRegime = "";
+double   g_ePrice=0, g_eSL=0, g_eTP=0, g_eLot=0, g_eRSI=0, g_eATR=0;
+double   g_eSwingDist=0, g_eEmaGap=0, g_eTrendDist=0;
+int      g_eHour=0, g_eDow=0, g_eSpread=0;
 
 //============================ INIT =================================
 int OnInit()
@@ -201,6 +214,9 @@ void CheckSignals()
    PrintFormat("bar %s | regime=%s | RSI=%.1f | %s",
                TimeToString(iTime(_Symbol,TradeTF,0), TIME_MINUTES), g_regime, r1, g_waiting);
 
+   g_featEmaGap   = ef - es;          // momentum of fast vs slow EMA
+   g_featTrendDist = closePrev - et;  // distance above/below the trend EMA
+
    if(longSig)       OpenTrade(true,  a);
    else if(shortSig) OpenTrade(false, a);
 }
@@ -236,6 +252,15 @@ void OpenTrade(bool isLong, double atr)
                   isLong ? "BUY" : "SELL", _Symbol, lot, price, sl, tp, tradesToday);
       QueueTelegram(StringFormat("ENTRY %s %s %.2f lot @ %.2f | SL %.2f | TP %.2f (trade %d)",
                   isLong ? "BUY" : "SELL", _Symbol, lot, price, sl, tp, tradesToday));
+
+      // snapshot entry features; written to the learning log when the trade closes
+      MqlDateTime edt; TimeToStruct(TimeCurrent(), edt);
+      g_eHasOpen = true; g_eTime = TimeCurrent(); g_eDir = isLong ? "BUY" : "SELL";
+      g_ePrice = price; g_eSL = sl; g_eTP = tp; g_eLot = lot;
+      g_eRSI = g_rsiNow; g_eATR = atr; g_eSwingDist = slDist;
+      g_eEmaGap = g_featEmaGap; g_eTrendDist = g_featTrendDist;
+      g_eRegime = isLong ? "BULL" : "BEAR";
+      g_eHour = edt.hour; g_eDow = edt.day_of_week; g_eSpread = CurrentSpreadPoints();
    }
    else
       PrintFormat("Order FAILED: retcode=%d (%s)",
@@ -507,6 +532,31 @@ void FlushTelegram()
    ArrayResize(g_tgQueue, 0);
 }
 
+//============================ LEARNING LOG =========================
+// One row per closed trade: entry features + outcome. This is the data
+// a feedback loop (or an ML model) learns from later.
+void WriteTradeLog(double exitPrice, double profit, long durMin, string reason)
+{
+   bool existed = FileIsExist(TradeLogFile);
+   int h = FileOpen(TradeLogFile, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+   if(h == INVALID_HANDLE) { Print("Trade log open failed: ", GetLastError()); return; }
+   FileSeek(h, 0, SEEK_END);
+   if(!existed)
+      FileWrite(h, "close_time","dir","outcome","reason","entry","exit","sl","tp",
+                   "lot","profit","dur_min","regime","rsi","atr","ema_gap",
+                   "trend_dist","sl_dist","hour","dow","spread_pts");
+   FileWrite(h,
+      TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+      g_eDir, (profit >= 0 ? "WIN" : "LOSS"), reason,
+      DoubleToString(g_ePrice,2), DoubleToString(exitPrice,2),
+      DoubleToString(g_eSL,2), DoubleToString(g_eTP,2), DoubleToString(g_eLot,2),
+      DoubleToString(profit,2), (string)durMin, g_eRegime,
+      DoubleToString(g_eRSI,1), DoubleToString(g_eATR,2), DoubleToString(g_eEmaGap,2),
+      DoubleToString(g_eTrendDist,2), DoubleToString(g_eSwingDist,2),
+      (string)g_eHour, (string)g_eDow, (string)g_eSpread);
+   FileClose(h);
+}
+
 // Report position closes (TP / SL / manual) for EA-owned trades
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
@@ -524,6 +574,17 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    QueueTelegram(StringFormat("%s %s ditutup @ %.2f | P/L %.2f %s | harian %.2f%%",
                  profit >= 0 ? "WIN +" : "LOSS", _Symbol, price, profit,
                  AccountInfoString(ACCOUNT_CURRENCY), dpnl));
+
+   if(EnableTradeLog && g_eHasOpen)
+   {
+      long   durMin = (long)((TimeCurrent() - g_eTime) / 60);
+      double tol    = g_eATR * 0.25 + _Point * 10;
+      string reason = "OTHER";
+      if(MathAbs(price - g_eTP) <= tol)      reason = "TP";
+      else if(MathAbs(price - g_eSL) <= tol) reason = "SL";
+      WriteTradeLog(price, profit, durMin, reason);
+      g_eHasOpen = false;
+   }
 }
 
 //==================== TELEGRAM TWO-WAY (commands) =================
