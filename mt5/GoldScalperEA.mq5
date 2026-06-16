@@ -782,6 +782,7 @@ void HandleCommand(string text)
    else if(cmd == "/pause")   { g_paused = true;  SendTelegram("Bot di-PAUSE. Entry baru distop; posisi terbuka tetap dijaga SL/TP. Kirim /resume untuk lanjut."); }
    else if(cmd == "/resume")  { g_paused = false; SendTelegram("Bot LANJUT — kembali mencari sinyal."); }
    else if(cmd == "/close")   CloseAllAndReport();
+   else if(cmd == "/settings" || cmd == "/config") SendTelegram(BuildSettings());
    else if(cmd == "/help" || cmd == "/start") SendTelegram(BuildHelp());
    else SendTelegram("Perintah tidak dikenal: " + cmd + "\nKetik /help.");
 }
@@ -855,7 +856,36 @@ string BuildReport()
 
 string BuildHelp()
 {
-   return "Perintah GoldScalperEA:\n/status - kondisi & sinyal sekarang\n/report - rekap trade hari ini\n/pause - stop entry baru\n/resume - lanjutkan\n/close - tutup posisi EA yang terbuka\n/help - tampilkan ini";
+   return "Perintah GoldScalperEA:\n/status - kondisi, posisi & floating P/L\n/report - rekap trade hari ini\n/settings - semua parameter bot\n/pause - stop entry baru\n/resume - lanjutkan\n/close - tutup posisi EA yang terbuka\n/help - tampilkan ini";
+}
+
+// Dump every key parameter so you can audit the bot's config from Telegram.
+// (Token deliberately NOT included — it's a secret.)
+string BuildSettings()
+{
+   string s = "PARAMETER GoldScalperEA";
+   s += "\n[TF] trade " + EnumToString(TradeTF) + " / trend " + EnumToString(TrendTF);
+   s += "\n[EMA] " + (string)FastEMA + "/" + (string)SlowEMA + "/" + (string)TrendEMA
+        + " | RSI" + (string)RSIPeriod + " L" + DoubleToString(RSILongLevel,0) + "/S" + DoubleToString(RSIShortLevel,0);
+   s += "\n[Bias H-TF] " + (UseHigherTFBias ? "ON " : "OFF ") + EnumToString(BiasTF) + " EMA" + (string)BiasEMA;
+   s += "\n[Sizing] " + (UseRiskSizing ? ("Risk " + DoubleToString(RiskPercent,1) + "%")
+                                       : ("Fixed " + DoubleToString(FixedLot,2) + " lot"))
+        + " | MaxLot " + DoubleToString(MaxLot,2);
+   s += "\n[SL] " + DoubleToString(SL_ATR_Mult,1) + "xATR | TP RR 1:" + DoubleToString(RewardRisk,1);
+   s += "\n[Swing SL] " + (UseSwingStops ? "ON" : "OFF") + " LB" + (string)SwingLookback
+        + " buf" + DoubleToString(SwingBufferATR,1) + " cap" + DoubleToString(SwingSLCapATR,1) + "ATR";
+   s += "\n[Breakeven] " + (UseBreakeven ? "ON" : "OFF") + " arm $" + DoubleToString(BreakevenActivate,1)
+        + " lock $" + DoubleToString(BreakevenLock,1);
+   s += "\n[Trailing] " + (UseTrailing ? "ON" : "OFF") + " arm $" + DoubleToString(TrailActivate,1)
+        + " give $" + DoubleToString(TrailGiveback,1);
+   s += "\n[Exits] hold " + (string)MaxHoldHours + "h | maxTrades/day " + (string)MaxTradesPerDay
+        + " | maxOpen " + (string)MaxOpenPositions;
+   s += "\n[Guards] kill -" + DoubleToString(MaxDailyLossPct,1) + "% | target +" + DoubleToString(DailyProfitTarget,1) + "%";
+   s += "\n[Filters] sesi " + (string)TradeStartHour + "-" + (string)TradeEndHour
+        + " | maxSpread " + (string)MaxSpreadPoints + "pts";
+   s += "\n[Telegram] " + (EnableTelegram ? "ON" : "OFF") + " poll " + (string)TelegramPollSec + "s";
+   s += "\n[Magic] " + (string)MagicNumber;
+   return s;
 }
 
 void CloseAllAndReport()
