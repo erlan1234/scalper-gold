@@ -34,9 +34,9 @@ input int             ATRPeriod     = 14;          // ATR period (for SL/TP dist
 input group "=== Risk / Exits ==="
 input double SL_ATR_Mult    = 1.5;    // Stop-loss distance = ATR x this
 input double RewardRisk     = 2.0;    // Take-profit = SL distance x this (2.0 = R:R 1:2)
-input bool   UseRiskPercent = true;   // true = risk % of balance per trade (aggressive); false = fixed lot
-input double FixedLot       = 0.01;   // Lot used when UseRiskPercent = false
-input double RiskPercent    = 2.0;    // % of balance risked per trade (when UseRiskPercent = true)
+input bool   UseRiskSizing = true;   // true = risk % of balance per trade (aggressive); false = fixed lot
+input double FixedLot       = 0.01;   // Lot used when UseRiskSizing = false
+input double RiskPercent    = 2.0;    // % of balance risked per trade (when UseRiskSizing = true)
 input double MaxLot         = 1.0;    // Hard cap on lot size (safety)
 input int    MaxHoldHours   = 24;     // Force-close a position after N hours (0 = off)
 
@@ -138,7 +138,7 @@ int OnInit()
    ResetDaily();
    PrintFormat("GoldScalperEA started on %s %s  (mode: %s)",
                _Symbol, EnumToString(TradeTF),
-               UseRiskPercent ? StringFormat("risk %.1f%%", RiskPercent)
+               UseRiskSizing ? StringFormat("risk %.1f%%", RiskPercent)
                               : StringFormat("fixed %.2f lot", FixedLot));
    QueueTelegram(StringFormat("GoldScalperEA online di %s %s — siap berburu sinyal. Ketik /help untuk perintah.",
                               _Symbol, EnumToString(TradeTF)));
@@ -311,7 +311,7 @@ double CalcLot(double slDist)
 {
    double lot = FixedLot;
 
-   if(UseRiskPercent && slDist > 0)
+   if(UseRiskSizing && slDist > 0)
    {
       double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
       double riskMoney = balance * RiskPercent / 100.0;
@@ -567,7 +567,7 @@ void UpdateDashboard()
 
    string s  = "════ GoldScalperEA ════\n";
    s += "Symbol      : " + _Symbol + "   TF: " + EnumToString(TradeTF) + "\n";
-   s += "Mode        : " + (UseRiskPercent ? StringFormat("Risk %.1f%%", RiskPercent)
+   s += "Mode        : " + (UseRiskSizing ? StringFormat("Risk %.1f%%", RiskPercent)
                                             : StringFormat("Fixed %.2f lot", FixedLot)) + "\n";
    s += "Open (EA)   : " + (string)CountMyPositions() + " / " + (string)MaxOpenPositions + "\n";
    s += "Trades today: " + (string)tradesToday + (MaxTradesPerDay>0 ? " / "+(string)MaxTradesPerDay : "") + "\n";
