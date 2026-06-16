@@ -23,6 +23,9 @@ input ENUM_TIMEFRAMES TrendTF       = PERIOD_M15;  // Higher TF for trend filter
 input int             FastEMA       = 21;          // Fast EMA (trade TF)
 input int             SlowEMA       = 50;          // Slow EMA (trade TF)
 input int             TrendEMA      = 200;         // Trend EMA (on TrendTF)
+input bool            UseHigherTFBias = true;       // only trade WITH the macro (higher-TF) trend
+input ENUM_TIMEFRAMES BiasTF          = PERIOD_H4;  // macro trend timeframe
+input int             BiasEMA         = 200;        // EMA length on BiasTF
 input int             RSIPeriod     = 14;          // RSI period
 input double          RSILongLevel  = 50.0;        // Long: RSI crosses UP through this (50=midline; lower=stricter/rarer)
 input double          RSIShortLevel = 50.0;        // Short: RSI crosses DOWN through this (50=midline; higher=stricter/rarer)
@@ -72,6 +75,7 @@ input string TradeLogFile   = "GoldScalperEA_trades.csv"; // in MQL5/Files (test
 //============================ GLOBALS ==============================
 int      hEmaFast = INVALID_HANDLE, hEmaSlow = INVALID_HANDLE;
 int      hEmaTrend = INVALID_HANDLE, hRSI = INVALID_HANDLE, hATR = INVALID_HANDLE;
+int      hEmaBias = INVALID_HANDLE;  // macro trend filter (higher TF)
 datetime lastBarTime    = 0;
 double   dailyStartEquity = 0.0;
 int      dayOfTracking  = -1;
@@ -103,9 +107,10 @@ int OnInit()
    hEmaTrend = iMA(_Symbol, TrendTF, TrendEMA, 0, MODE_EMA, PRICE_CLOSE);
    hRSI      = iRSI(_Symbol, TradeTF, RSIPeriod, PRICE_CLOSE);
    hATR      = iATR(_Symbol, TradeTF, ATRPeriod);
+   hEmaBias  = iMA(_Symbol, BiasTF, BiasEMA, 0, MODE_EMA, PRICE_CLOSE);
 
    if(hEmaFast==INVALID_HANDLE || hEmaSlow==INVALID_HANDLE || hEmaTrend==INVALID_HANDLE ||
-      hRSI==INVALID_HANDLE || hATR==INVALID_HANDLE)
+      hRSI==INVALID_HANDLE || hATR==INVALID_HANDLE || hEmaBias==INVALID_HANDLE)
    {
       Print("ERROR: failed to create indicator handles.");
       return(INIT_FAILED);
@@ -137,6 +142,7 @@ void OnDeinit(const int reason)
    if(hEmaTrend!=INVALID_HANDLE) IndicatorRelease(hEmaTrend);
    if(hRSI!=INVALID_HANDLE)      IndicatorRelease(hRSI);
    if(hATR!=INVALID_HANDLE)      IndicatorRelease(hATR);
+   if(hEmaBias!=INVALID_HANDLE)  IndicatorRelease(hEmaBias);
    EventKillTimer();
    Comment("");
 }
@@ -190,18 +196,34 @@ void CheckSignals()
 
    if(a <= 0) return;
 
-   bool bull = (closePrev > et) && (ef > es);   // uptrend regime
+   bool bull = (closePrev > et) && (ef > es);   // uptrend regime (M15 + M5)
    bool bear = (closePrev < et) && (ef < es);   // downtrend regime
 
+   // Macro bias: only allow trades WITH the higher-TF trend (fixes counter-trend longs)
+   bool bullBias = true, bearBias = true;
+   if(UseHigherTFBias)
+   {
+      double bias[]; ArraySetAsSeries(bias, true);
+      if(CopyBuffer(hEmaBias, 0, 0, 2, bias) >= 1)
+      {
+         bullBias = closePrev > bias[0];
+         bearBias = closePrev < bias[0];
+      }
+   }
+
    // Pullback reset: RSI crosses back up (long) / down (short) through the reset level
-   bool longSig  = bull && (r2 <  RSILongLevel)  && (r1 >= RSILongLevel);
-   bool shortSig = bear && (r2 >  RSIShortLevel) && (r1 <= RSIShortLevel);
+   bool longSig  = bull && bullBias && (r2 <  RSILongLevel)  && (r1 >= RSILongLevel);
+   bool shortSig = bear && bearBias && (r2 >  RSIShortLevel) && (r1 <= RSIShortLevel);
 
    // --- diagnostics: record WHY we do / don't enter this bar ---
    g_rsiNow = r1;
    g_regime = bull ? "BULL (cari LONG)" : bear ? "BEAR (cari SHORT)" : "MIXED (no-trade)";
    if(!bull && !bear)
       g_waiting = "tren M15 & micro M5 belum sepakat";
+   else if(bull && !bullBias)
+      g_waiting = "uptrend kecil tapi tren H4 turun -> long diblokir";
+   else if(bear && !bearBias)
+      g_waiting = "downtrend kecil tapi tren H4 naik -> short diblokir";
    else if(bull)
       g_waiting = longSig ? "SINYAL LONG!"
                           : StringFormat("perlu RSI cross naik %.0f (kini %.0f, %s)",
