@@ -73,9 +73,9 @@ input long   MagicNumber  = 990013;          // Unique ID for this EA's trades
 input string TradeComment = "GoldScalperEA"; // Order comment
 
 input group "=== Telegram alerts ==="
-input bool   EnableTelegram = false; // turn ON to send Telegram notifications
-input string TelegramToken  = "";    // bot token from @BotFather
-input string TelegramChatID = "";    // your chat id (get it from @userinfobot)
+input bool   EnableTelegram = true;  // notifications ON by default
+input string TelegramToken  = "";    // blank = auto-load from MQL5/Files/gs_telegram_token.txt (kept out of git)
+input string TelegramChatID = "7758500311"; // chat id baked in
 input int    TelegramPollSec = 5;    // check for incoming Telegram commands every N seconds
 
 input group "=== Trade logging (learning data) ==="
@@ -97,6 +97,7 @@ string   g_regime  = "warming up";
 double   g_rsiNow  = 0.0;
 string   g_waiting = "menunggu data candle...";
 string   g_tgQueue[];   // pending Telegram messages, flushed in OnTick
+string   g_tgToken = ""; // resolved bot token (input, else local file)
 bool     g_paused      = false;  // paused via Telegram /pause
 long     g_lastUpdateId = 0;     // last processed Telegram update_id
 
@@ -140,6 +141,7 @@ int OnInit()
                _Symbol, EnumToString(TradeTF),
                UseRiskSizing ? StringFormat("risk %.1f%%", RiskPercent)
                               : StringFormat("fixed %.2f lot", FixedLot));
+   g_tgToken = (StringLen(TelegramToken) > 0) ? TelegramToken : ReadTokenFile();
    QueueTelegram(StringFormat("GoldScalperEA online di %s %s — siap berburu sinyal. Ketik /help untuk perintah.",
                               _Symbol, EnumToString(TradeTF)));
    if(EnableTelegram)
@@ -599,10 +601,22 @@ string UrlEncode(string s)
    return out;
 }
 
+// Load the bot token from a local file (MQL5/Files) so it never lives in the
+// source / git. Returns "" if the file is missing.
+string ReadTokenFile()
+{
+   int h = FileOpen("gs_telegram_token.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+   if(h == INVALID_HANDLE) return "";
+   string t = FileReadString(h);
+   FileClose(h);
+   StringTrimLeft(t); StringTrimRight(t);
+   return t;
+}
+
 void SendTelegram(string text)
 {
-   if(!EnableTelegram || TelegramToken == "" || TelegramChatID == "") return;
-   string url  = "https://api.telegram.org/bot" + TelegramToken + "/sendMessage";
+   if(!EnableTelegram || g_tgToken == "" || TelegramChatID == "") return;
+   string url  = "https://api.telegram.org/bot" + g_tgToken + "/sendMessage";
    string body = "chat_id=" + TelegramChatID + "&text=" + UrlEncode(text);
    uchar post[], result[];
    int written = StringToCharArray(body, post, 0, -1, CP_UTF8);
@@ -729,8 +743,8 @@ string ExtractChatId(string seg)
 
 void PollTelegram(bool execute)
 {
-   if(!EnableTelegram || TelegramToken == "" || TelegramChatID == "") return;
-   string url = "https://api.telegram.org/bot" + TelegramToken +
+   if(!EnableTelegram || g_tgToken == "" || TelegramChatID == "") return;
+   string url = "https://api.telegram.org/bot" + g_tgToken +
                 "/getUpdates?timeout=0&offset=" + IntegerToString(g_lastUpdateId + 1);
    uchar data[], result[];
    string resHeaders;
