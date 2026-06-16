@@ -34,7 +34,7 @@ input int             ATRPeriod     = 14;          // ATR period (for SL/TP dist
 input group "=== Risk / Exits ==="
 input double SL_ATR_Mult    = 1.5;    // Stop-loss distance = ATR x this
 input double RewardRisk     = 2.0;    // Take-profit = SL distance x this (2.0 = R:R 1:2)
-input bool   UseRiskPercent = false;  // false = fixed lot (safe default); true = % risk sizing
+input bool   UseRiskPercent = true;   // true = risk % of balance per trade (aggressive); false = fixed lot
 input double FixedLot       = 0.01;   // Lot used when UseRiskPercent = false
 input double RiskPercent    = 2.0;    // % of balance risked per trade (when UseRiskPercent = true)
 input double MaxLot         = 1.0;    // Hard cap on lot size (safety)
