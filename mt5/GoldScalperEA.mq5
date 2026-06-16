@@ -705,14 +705,47 @@ void HandleCommand(string text)
    else SendTelegram("Perintah tidak dikenal: " + cmd + "\nKetik /help.");
 }
 
+// List every open EA position with its live floating P/L (+/-) and a total.
+string BuildOpenList()
+{
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   string s = ""; double tot = 0; int n = 0;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)     continue;
+      n++;
+      bool   isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      double op  = PositionGetDouble(POSITION_PRICE_OPEN);
+      double cp  = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double pf  = PositionGetDouble(POSITION_PROFIT);
+      double sl  = PositionGetDouble(POSITION_SL);
+      double tp  = PositionGetDouble(POSITION_TP);
+      tot += pf;
+      s += StringFormat("\n%d) %s %.2f @ %.2f -> %.2f | %s%.2f %s | SL %.2f / TP %.2f",
+                        n, isBuy ? "BUY" : "SELL", vol, op, cp,
+                        pf >= 0 ? "+" : "", pf, cur, sl, tp);
+   }
+   if(n == 0) return "\n(tidak ada posisi terbuka)";
+   s += StringFormat("\nTotal floating: %s%.2f %s", tot >= 0 ? "+" : "", tot, cur);
+   return s;
+}
+
 string BuildStatus()
 {
    double dpnl = dailyStartEquity > 0
                  ? (AccountInfoDouble(ACCOUNT_EQUITY) - dailyStartEquity) / dailyStartEquity * 100.0 : 0.0;
-   return StringFormat("STATUS %s %s\nRegime: %s\nRSI: %.1f\n%s\nPosisi EA: %d/%d | Trade hari ini: %d\nP/L harian: %.2f%%\nState: %s",
+   string s = StringFormat("STATUS %s %s\nRegime: %s\nRSI: %.1f\n%s\nPosisi EA: %d/%d | Trade hari ini: %d\nP/L harian: %.2f%%\nEquity: %.2f %s\nState: %s",
           _Symbol, EnumToString(TradeTF), g_regime, g_rsiNow, g_waiting,
           CountMyPositions(), MaxOpenPositions, tradesToday, dpnl,
+          AccountInfoDouble(ACCOUNT_EQUITY), AccountInfoString(ACCOUNT_CURRENCY),
           haltedToday ? "HALTED (limit)" : (g_paused ? "PAUSED" : "running"));
+   s += "\n--- Posisi terbuka ---";
+   s += BuildOpenList();
+   return s;
 }
 
 string BuildReport()
