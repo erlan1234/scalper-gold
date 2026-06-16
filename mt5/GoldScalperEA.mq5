@@ -47,6 +47,11 @@ input int    SwingScanBars  = 60;     // how far back to search for the latest s
 input double SwingBufferATR = 0.3;    // buffer beyond the swing, as a fraction of ATR
 input double SwingSLCapATR  = 3.0;    // max SL distance in ATR (risk cap if the swing is far)
 
+input group "=== Trailing stop (profit lock) ==="
+input bool   UseTrailing   = false;   // OFF by default: A/B test showed it cut winners & turned +$239 into -$108
+input double TrailActivate = 3.0;     // arm trailing once floating profit reaches this ($)
+input double TrailGiveback = 2.0;     // close if profit drops this much ($) from its peak
+
 input group "=== Daily guards (kill-switch) ==="
 input double MaxDailyLossPct   = 5.0;  // Halt trading if down this % on the day
 input double DailyProfitTarget = 5.0;  // Halt trading if up this % on the day (0 = off)
@@ -93,6 +98,11 @@ long     g_lastUpdateId = 0;     // last processed Telegram update_id
 // --- entry-feature snapshot, held until the trade closes (learning log) ---
 double   g_featEmaGap = 0, g_featTrendDist = 0;   // latest values, refreshed each bar
 bool     g_eHasOpen = false;
+// --- trailing-stop state (MaxOpenPositions=1, tracked by ticket) ---
+ulong    g_trailTicket = 0;
+double   g_peakProfit  = 0;
+bool     g_trailArmed  = false;
+bool     g_trailClosing = false;   // set right before a trailing close (for log labelling)
 datetime g_eTime = 0;
 string   g_eDir = "", g_eRegime = "";
 double   g_ePrice=0, g_eSL=0, g_eTP=0, g_eLot=0, g_eRSI=0, g_eATR=0;
@@ -153,6 +163,7 @@ void OnTick()
    FlushTelegram();           // send any queued Telegram alerts
    ManageDailyState();        // reset on new day + evaluate kill-switch
    ManageOpenPositions();     // max-hold auto-close
+   ManageTrailing();          // lock profit if it retraces from the peak
    UpdateDashboard();
 
    if(haltedToday || g_paused) return;  // daily limit hit, or paused via Telegram /pause
@@ -405,6 +416,40 @@ void ManageOpenPositions()
    }
 }
 
+// Lock profit: once floating P/L hits TrailActivate, close if it falls
+// TrailGiveback below its peak. SL/TP stay as the hard backstops.
+void ManageTrailing()
+{
+   if(!UseTrailing) return;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)     continue;
+
+      double pf = PositionGetDouble(POSITION_PROFIT);   // floating money
+
+      if(tk != g_trailTicket)            // new position -> reset peak tracking
+      {
+         g_trailTicket = tk; g_peakProfit = pf; g_trailArmed = false;
+      }
+      if(pf > g_peakProfit) g_peakProfit = pf;
+      if(!g_trailArmed && g_peakProfit >= TrailActivate) g_trailArmed = true;
+
+      if(g_trailArmed && pf <= g_peakProfit - TrailGiveback)
+      {
+         g_trailClosing = true;
+         if(trade.PositionClose(tk))
+            Print("Trailing close: peak ", DoubleToString(g_peakProfit,2),
+                  " -> ", DoubleToString(pf,2));
+         else
+            g_trailClosing = false;        // close failed; keep managing
+      }
+      return;                              // only one EA position (MaxOpenPositions=1)
+   }
+}
+
 int CountMyPositions()
 {
    int c = 0;
@@ -602,7 +647,8 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       long   durMin = (long)((TimeCurrent() - g_eTime) / 60);
       double tol    = g_eATR * 0.25 + _Point * 10;
       string reason = "OTHER";
-      if(MathAbs(price - g_eTP) <= tol)      reason = "TP";
+      if(g_trailClosing)                     { reason = "TRAIL"; g_trailClosing = false; }
+      else if(MathAbs(price - g_eTP) <= tol) reason = "TP";
       else if(MathAbs(price - g_eSL) <= tol) reason = "SL";
       WriteTradeLog(price, profit, durMin, reason);
       g_eHasOpen = false;
