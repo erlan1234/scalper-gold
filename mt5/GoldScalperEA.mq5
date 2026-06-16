@@ -52,6 +52,11 @@ input bool   UseTrailing   = false;   // OFF by default: A/B test showed it cut 
 input double TrailActivate = 3.0;     // arm trailing once floating profit reaches this ($)
 input double TrailGiveback = 2.0;     // close if profit drops this much ($) from its peak
 
+input group "=== Breakeven stop ==="
+input bool   UseBreakeven      = true; // move SL to ~entry once in decent profit (upside stays open)
+input double BreakevenActivate = 3.0;  // arm once floating profit reaches this ($) — A/B best
+input double BreakevenLock     = 1.0;  // new SL = entry +/- this (price): locks a bit + covers spread
+
 input group "=== Daily guards (kill-switch) ==="
 input double MaxDailyLossPct   = 5.0;  // Halt trading if down this % on the day
 input double DailyProfitTarget = 5.0;  // Halt trading if up this % on the day (0 = off)
@@ -164,6 +169,7 @@ void OnTick()
    ManageDailyState();        // reset on new day + evaluate kill-switch
    ManageOpenPositions();     // max-hold auto-close
    ManageTrailing();          // lock profit if it retraces from the peak
+   ManageBreakeven();         // move SL to entry once comfortably in profit
    UpdateDashboard();
 
    if(haltedToday || g_paused) return;  // daily limit hit, or paused via Telegram /pause
@@ -447,6 +453,35 @@ void ManageTrailing()
             g_trailClosing = false;        // close failed; keep managing
       }
       return;                              // only one EA position (MaxOpenPositions=1)
+   }
+}
+
+// Once a trade is comfortably in profit, move its SL to (just past) entry so it
+// can no longer become a loss. Upside stays uncapped (unlike trailing).
+void ManageBreakeven()
+{
+   if(!UseBreakeven) return;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)     continue;
+
+      if(PositionGetDouble(POSITION_PROFIT) < BreakevenActivate) return;
+
+      bool   isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL = PositionGetDouble(POSITION_SL);
+      double tp    = PositionGetDouble(POSITION_TP);
+      double newSL = NormalizeDouble(isBuy ? entry + BreakevenLock : entry - BreakevenLock, _Digits);
+
+      bool improves = isBuy ? (curSL < newSL - _Point)
+                            : (curSL == 0 || curSL > newSL + _Point);
+      if(improves)
+         if(trade.PositionModify(tk, newSL, tp))
+            Print("Breakeven: SL -> ", DoubleToString(newSL, _Digits));
+      return;   // MaxOpenPositions = 1
    }
 }
 
